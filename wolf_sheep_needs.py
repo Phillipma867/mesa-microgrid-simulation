@@ -1,345 +1,264 @@
-"""
-wolf_sheep_needs.py — Needs-based Wolf-Sheep model for Mesa
-
-This is a prototype implementation exploring needs-based behavioral
-architecture in Mesa, part of the GSoC 2026 Behavioral Framework evaluation.
-
-The standard Wolf-Sheep model uses hardcoded probabilities to control
-agent behavior (e.g. wolf_reproduce = 0.05). This version replaces
-those probabilities with explicit needs — hunger, energy, fear — that
-compete for priority and drive behavior dynamically.
-
-The key question this prototype investigates: how cleanly can a
-needs-based behavioral architecture be expressed in Mesa, and what
-primitives would Mesa need to provide to make this easier?
-
-Current status: prototype / work in progress
-Observations so far are documented in BEHAVIORAL_NOTES.md
-"""
+# wolf_sheep_needs.py
+#
+# Needs-based Wolf-Sheep prototype — part of my GSoC 2026 Behavioral Framework work
+#
+# The standard Mesa Wolf-Sheep uses a fixed probability for reproduction
+# (wolf_reproduce = 0.05 etc). That always felt weird to me — a wolf doesn't
+# decide to reproduce based on a dice roll, it does it when it's healthy enough
+# and not starving. So this version replaces those probabilities with explicit
+# needs that build up over time and drive behavior.
+#
+# Still a work in progress. Main thing I'm trying to figure out is how much
+# scaffolding Mesa forces you to write vs what it could provide natively.
+# Notes on that are in BEHAVIORAL_NOTES.md.
 
 from mesa import Agent, Model
 from mesa.time import RandomActivation
 from mesa.space import MultiGrid
-import numpy as np
 
 
-# =============================================================================
-# Needs framework
+# --- Needs framework ---------------------------------------------------------
 #
-# Mesa has no built-in concept of "needs" or "drives". This small utility
-# is something I had to write from scratch. A NeedsAgent mixin that Mesa
-# provided natively would make this pattern much easier to express.
-# =============================================================================
+# Had to write this from scratch. Basically a need has an urgency level
+# that ticks up every step and drops when satisfied. The agent looks at
+# all its needs each step and acts on whichever is most urgent.
+#
+# If Mesa had a NeedsAgent base class built in, I wouldn't need any of this.
 
 class Need:
-    """
-    A single need with a current urgency level (0.0 to 1.0).
-
-    Urgency increases over time and decreases when the need is satisfied.
-    The agent's behavior is driven by whichever need is most urgent.
-    """
-
-    def __init__(self, name, initial=0.0, decay_rate=0.05):
-        self.name       = name
-        self.urgency    = initial
-        self.decay_rate = decay_rate   # how fast urgency grows per step
+    def __init__(self, name, initial=0.0, growth=0.05):
+        self.name    = name
+        self.urgency = initial
+        self.growth  = growth   # how fast urgency builds up per step
 
     def tick(self):
-        """Urgency increases each step the need goes unmet."""
-        self.urgency = min(1.0, self.urgency + self.decay_rate)
+        self.urgency = min(1.0, self.urgency + self.growth)
 
     def satisfy(self, amount=1.0):
-        """Urgency drops when the need is met."""
         self.urgency = max(0.0, self.urgency - amount)
 
     def __repr__(self):
-        return f"Need({self.name}, urgency={self.urgency:.2f})"
+        return f"{self.name}({self.urgency:.2f})"
 
 
 class NeedsAgent(Agent):
-    """
-    Base class for agents with a needs-based behavioral architecture.
-
-    Subclasses register needs and define how to satisfy each one.
-    Each step, the agent identifies its most urgent need and acts on it.
-
-    This is the utility class I wish Mesa provided out of the box.
-    Without it, every needs-based model has to re-implement this logic.
-    """
+    # Base class for agents driven by needs.
+    # Subclasses call add_need() in __init__ and then use most_urgent()
+    # in their step() to decide what to do.
 
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
-        self.needs = {}   # name -> Need
+        self._needs = {}
 
-    def add_need(self, name, initial=0.0, decay_rate=0.05):
-        self.needs[name] = Need(name, initial, decay_rate)
+    def add_need(self, name, initial=0.0, growth=0.05):
+        self._needs[name] = Need(name, initial, growth)
 
-    def most_urgent_need(self):
-        if not self.needs:
+    def need(self, name):
+        return self._needs[name]
+
+    def most_urgent(self):
+        if not self._needs:
             return None
-        return max(self.needs.values(), key=lambda n: n.urgency)
+        return max(self._needs.values(), key=lambda n: n.urgency)
 
-    def tick_needs(self):
-        for need in self.needs.values():
-            need.tick()
+    def tick_all(self):
+        for n in self._needs.values():
+            n.tick()
 
 
-# =============================================================================
-# Wolf agent — needs: hunger, reproduction
-# =============================================================================
+# --- Wolf --------------------------------------------------------------------
 
 class Wolf(NeedsAgent):
-    """
-    Wolf with explicit needs replacing hardcoded reproduction probability.
-
-    Behavioral logic:
-      - If hunger is most urgent → try to eat a nearby sheep
-      - If reproduction need is most urgent → try to reproduce
-      - Otherwise → move randomly
-
-    In the standard Wolf-Sheep model, reproduction is controlled by a
-    fixed probability (wolf_reproduce = 0.05). Here it emerges naturally
-    from the reproduction need's urgency, which builds up over time and
-    resets after a successful reproduction.
-
-    Mesa observation: the agent needs to query the grid for nearby sheep,
-    which requires direct access to self.model.grid. There is no built-in
-    mechanism for agents to perceive their environment without going through
-    the model object. A proper behavioral framework might provide an
-    "observation range" primitive.
-    """
+    # Two needs: hunger and reproduction.
+    # Hunger grows faster so it takes priority most of the time,
+    # but reproduction urgency builds up slowly and eventually
+    # the wolf will look for a chance to breed.
+    #
+    # Mesa issue: to find nearby sheep I have to go through
+    # self.model.grid directly. There's no cleaner way to do
+    # environment perception in Mesa right now.
 
     def __init__(self, unique_id, model, energy=10):
         super().__init__(unique_id, model)
         self.energy = energy
-
-        # Register needs with different urgency growth rates
-        self.add_need("hunger",       initial=0.2, decay_rate=0.08)
-        self.add_need("reproduction", initial=0.0, decay_rate=0.03)
+        self.add_need("hunger",       initial=0.2, growth=0.08)
+        self.add_need("reproduction", initial=0.0, growth=0.03)
 
     def step(self):
-        self.move()
+        self._move()
         self.energy -= 1
-        self.tick_needs()
+        self.tick_all()
 
         if self.energy <= 0:
             self.model.grid.remove_agent(self)
             self.model.schedule.remove(self)
             return
 
-        # Act on the most urgent need
-        urgent = self.most_urgent_need()
+        top = self.most_urgent()
+        if top.name == "hunger":
+            self._eat()
+        elif top.name == "reproduction":
+            self._reproduce()
 
-        if urgent and urgent.name == "hunger":
-            self.eat()
-        elif urgent and urgent.name == "reproduction":
-            self.reproduce()
-
-    def move(self):
-        possible = self.model.grid.get_neighborhood(
+    def _move(self):
+        neighbors = self.model.grid.get_neighborhood(
             self.pos, moore=True, include_center=False)
-        new_pos = self.random.choice(possible)
-        self.model.grid.move_agent(self, new_pos)
+        self.model.grid.move_agent(self, self.random.choice(neighbors))
 
-    def eat(self):
-        cellmates = self.model.grid.get_cell_list_contents([self.pos])
-        sheep_here = [a for a in cellmates if isinstance(a, Sheep)]
-        if sheep_here:
-            sheep = self.random.choice(sheep_here)
-            self.model.grid.remove_agent(sheep)
-            self.model.schedule.remove(sheep)
+    def _eat(self):
+        here = self.model.grid.get_cell_list_contents([self.pos])
+        prey = [a for a in here if isinstance(a, Sheep)]
+        if prey:
+            target = self.random.choice(prey)
+            self.model.grid.remove_agent(target)
+            self.model.schedule.remove(target)
             self.energy += 20
-            self.needs["hunger"].satisfy(0.8)
+            self.need("hunger").satisfy(0.8)
 
-    def reproduce(self):
+    def _reproduce(self):
         if self.energy > 15:
-            self.energy = self.energy // 2
-            cub = Wolf(self.model.next_id(), self.model, energy=self.energy)
-            self.model.grid.place_agent(cub, self.pos)
-            self.model.schedule.add(cub)
-            self.needs["reproduction"].satisfy(1.0)
+            self.energy //= 2
+            pup = Wolf(self.model.next_id(), self.model, energy=self.energy)
+            self.model.grid.place_agent(pup, self.pos)
+            self.model.schedule.add(pup)
+            self.need("reproduction").satisfy(1.0)
 
 
-# =============================================================================
-# Sheep agent — needs: hunger (grass), fear (proximity to wolves)
-# =============================================================================
+# --- Sheep -------------------------------------------------------------------
 
 class Sheep(NeedsAgent):
-    """
-    Sheep with explicit hunger and fear needs.
-
-    Behavioral logic:
-      - If fear is most urgent → flee (move away from nearest wolf)
-      - If hunger is most urgent → graze (eat grass if available)
-      - Otherwise → move randomly
-
-    The fear need is interesting: it grows faster when wolves are nearby
-    and decays naturally when no wolves are in range. This creates emergent
-    flocking-like behavior without any explicit flocking rules.
-
-    Mesa observation: computing "nearest wolf" requires scanning all
-    neighbors via self.model.grid.get_neighbors(). This works but is
-    O(n) in the number of neighbors. A spatial query primitive ("find
-    nearest agent of type X within radius R") would be useful here.
-    """
+    # Two needs: hunger and fear.
+    # Fear is interesting — it spikes when wolves are nearby and
+    # drives the sheep to flee before it even thinks about eating.
+    # When no wolves are close, fear decays on its own.
+    #
+    # This produces something that looks like flocking without any
+    # explicit flocking rules, which is kind of cool.
+    #
+    # Mesa issue: scanning for nearby wolves is O(n) via get_neighbors.
+    # A spatial query like "nearest agent of type X" would help a lot here.
 
     def __init__(self, unique_id, model, energy=10):
         super().__init__(unique_id, model)
         self.energy = energy
-
-        self.add_need("hunger", initial=0.1, decay_rate=0.06)
-        self.add_need("fear",   initial=0.0, decay_rate=0.10)
+        self.add_need("hunger", initial=0.1, growth=0.06)
+        self.add_need("fear",   initial=0.0, growth=0.0)   # fear is event-driven
 
     def step(self):
         self.energy -= 1
-        self.tick_needs()
-        self.update_fear()
+        self.tick_all()
+        self._update_fear()
 
         if self.energy <= 0:
             self.model.grid.remove_agent(self)
             self.model.schedule.remove(self)
             return
 
-        urgent = self.most_urgent_need()
-
-        if urgent and urgent.name == "fear":
-            self.flee()
-        elif urgent and urgent.name == "hunger":
-            self.graze()
+        top = self.most_urgent()
+        if top.name == "fear":
+            self._flee()
+        elif top.name == "hunger":
+            self._graze()
         else:
-            self.move_random()
+            self._wander()
 
-    def update_fear(self):
-        """Fear urgency increases when wolves are nearby."""
-        neighbors = self.model.grid.get_neighbors(
+    def _update_fear(self):
+        nearby = self.model.grid.get_neighbors(
             self.pos, moore=True, radius=2, include_center=False)
-        wolves_nearby = sum(1 for a in neighbors if isinstance(a, Wolf))
-        if wolves_nearby > 0:
-            # Fear spikes proportionally to number of wolves nearby
-            self.needs["fear"].urgency = min(
-                1.0, self.needs["fear"].urgency + 0.2 * wolves_nearby)
+        wolf_count = sum(1 for a in nearby if isinstance(a, Wolf))
+        if wolf_count > 0:
+            self.need("fear").urgency = min(
+                1.0, self.need("fear").urgency + 0.2 * wolf_count)
         else:
-            # Fear decays naturally when no threat is present
-            self.needs["fear"].satisfy(0.1)
+            self.need("fear").satisfy(0.1)
 
-    def flee(self):
-        """Move to the neighbor cell with the fewest wolves."""
-        possible = self.model.grid.get_neighborhood(
+    def _flee(self):
+        options = self.model.grid.get_neighborhood(
             self.pos, moore=True, include_center=False)
-        # Score each cell by number of wolves in it — pick the safest
-        def wolf_count(pos):
-            return sum(1 for a in self.model.grid.get_cell_list_contents([pos])
-                       if isinstance(a, Wolf))
-        safest = min(possible, key=wolf_count)
+        safest = min(options, key=lambda p: sum(
+            1 for a in self.model.grid.get_cell_list_contents([p])
+            if isinstance(a, Wolf)))
         self.model.grid.move_agent(self, safest)
-        self.needs["fear"].satisfy(0.3)
+        self.need("fear").satisfy(0.3)
 
-    def graze(self):
-        """Eat grass at current position if available."""
-        grass_here = [a for a in self.model.grid.get_cell_list_contents([self.pos])
-                      if isinstance(a, GrassPatch) and a.fully_grown]
-        if grass_here:
-            grass_here[0].fully_grown = False
+    def _graze(self):
+        here = self.model.grid.get_cell_list_contents([self.pos])
+        grass = [a for a in here if isinstance(a, GrassPatch) and a.grown]
+        if grass:
+            grass[0].grown = False
             self.energy += 5
-            self.needs["hunger"].satisfy(0.7)
+            self.need("hunger").satisfy(0.7)
 
-    def move_random(self):
-        possible = self.model.grid.get_neighborhood(
+    def _wander(self):
+        options = self.model.grid.get_neighborhood(
             self.pos, moore=True, include_center=False)
-        self.model.grid.move_agent(self, self.random.choice(possible))
+        self.model.grid.move_agent(self, self.random.choice(options))
 
 
-# =============================================================================
-# GrassPatch — environment resource
-# =============================================================================
+# --- GrassPatch --------------------------------------------------------------
 
 class GrassPatch(Agent):
-    """Simple grass resource that regrows after being eaten."""
-
-    def __init__(self, unique_id, model, fully_grown=True, regrowth_time=5):
+    def __init__(self, unique_id, model, grown=True, regrow_after=5):
         super().__init__(unique_id, model)
-        self.fully_grown   = fully_grown
-        self.regrowth_time = regrowth_time
-        self._countdown    = 0
+        self.grown       = grown
+        self.regrow_after = regrow_after
+        self._timer      = 0
 
     def step(self):
-        if not self.fully_grown:
-            self._countdown += 1
-            if self._countdown >= self.regrowth_time:
-                self.fully_grown  = True
-                self._countdown   = 0
+        if not self.grown:
+            self._timer += 1
+            if self._timer >= self.regrow_after:
+                self.grown  = True
+                self._timer = 0
 
 
-# =============================================================================
-# WolfSheepNeedsModel
-# =============================================================================
+# --- Model -------------------------------------------------------------------
 
 class WolfSheepNeedsModel(Model):
-    """
-    Wolf-Sheep simulation using needs-based behavioral agents.
+    # Main difference from the standard Mesa Wolf-Sheep:
+    # behavior emerges from competing needs instead of probability parameters.
+    # A wolf doesn't reproduce with p=0.05 — it reproduces when its
+    # reproduction urgency beats its hunger urgency AND it has enough energy.
 
-    Compared to the standard Mesa Wolf-Sheep model, behavior here emerges
-    from competing needs rather than hardcoded probabilities. A wolf does
-    not reproduce with probability 0.05 — it reproduces when its
-    reproduction need becomes urgent enough relative to its hunger need.
-
-    This makes the model more sensitive to initial conditions and produces
-    richer emergent dynamics, but it also requires more scaffolding code
-    because Mesa does not provide needs-based primitives natively.
-    """
-
-    def __init__(self, width=20, height=20,
-                 n_wolves=10, n_sheep=50, n_grass=100):
+    def __init__(self, width=20, height=20, n_wolves=10, n_sheep=50, n_grass=100):
         super().__init__()
         self.grid     = MultiGrid(width, height, torus=True)
         self.schedule = RandomActivation(self)
         self.running  = True
 
-        # Place grass
-        for i in range(n_grass):
-            x = self.random.randrange(width)
-            y = self.random.randrange(height)
-            grass = GrassPatch(self.next_id(), self,
-                               fully_grown=self.random.choice([True, False]))
-            self.grid.place_agent(grass, (x, y))
-            self.schedule.add(grass)
+        for _ in range(n_grass):
+            g = GrassPatch(self.next_id(), self,
+                           grown=self.random.choice([True, False]))
+            x, y = self.random.randrange(width), self.random.randrange(height)
+            self.grid.place_agent(g, (x, y))
+            self.schedule.add(g)
 
-        # Place sheep
         for _ in range(n_sheep):
+            s = Sheep(self.next_id(), self, energy=self.random.randint(5, 15))
             x, y = self.random.randrange(width), self.random.randrange(height)
-            sheep = Sheep(self.next_id(), self,
-                          energy=self.random.randint(5, 15))
-            self.grid.place_agent(sheep, (x, y))
-            self.schedule.add(sheep)
+            self.grid.place_agent(s, (x, y))
+            self.schedule.add(s)
 
-        # Place wolves
         for _ in range(n_wolves):
+            w = Wolf(self.next_id(), self, energy=self.random.randint(8, 20))
             x, y = self.random.randrange(width), self.random.randrange(height)
-            wolf = Wolf(self.next_id(), self,
-                        energy=self.random.randint(8, 20))
-            self.grid.place_agent(wolf, (x, y))
-            self.schedule.add(wolf)
+            self.grid.place_agent(w, (x, y))
+            self.schedule.add(w)
 
     def step(self):
         self.schedule.step()
 
-    def count_wolves(self):
+    def wolves(self):
         return sum(1 for a in self.schedule.agents if isinstance(a, Wolf))
 
-    def count_sheep(self):
+    def sheep(self):
         return sum(1 for a in self.schedule.agents if isinstance(a, Sheep))
 
 
-# =============================================================================
-# Quick demo
-# =============================================================================
-
 if __name__ == "__main__":
-    model = WolfSheepNeedsModel(n_wolves=8, n_sheep=40)
-    print(f"Step 0: {model.count_wolves()} wolves, {model.count_sheep()} sheep")
-
+    m = WolfSheepNeedsModel(n_wolves=8, n_sheep=40)
+    print(f"start: {m.wolves()} wolves, {m.sheep()} sheep")
     for i in range(1, 21):
-        model.step()
+        m.step()
         if i % 5 == 0:
-            print(f"Step {i}: {model.count_wolves()} wolves, "
-                  f"{model.count_sheep()} sheep")
+            print(f"step {i}: {m.wolves()} wolves, {m.sheep()} sheep")
