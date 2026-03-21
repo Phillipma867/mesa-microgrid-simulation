@@ -208,8 +208,7 @@ def _node(img_url, label, is_bus=False, z=1):
     lc  = "#1e3a8a" if is_bus else "#111827"
     img = (f'<img src="{img_url}" style="width:64px;height:56px;'
            f'object-fit:cover;border-radius:8px;margin-bottom:5px;"/>' if img_url else "")
-    sub = ('<div style="font-size:9px;color:#93c5fd;margin-top:2px;">'
-           'power balance node</div>' if is_bus else "")
+    sub = ""
     return (f'<div style="width:100%;height:100%;display:flex;flex-direction:column;'
             f'align-items:center;justify-content:center;background:{bg};'
             f'border:1.5px solid {bdr};border-radius:12px;'
