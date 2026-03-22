@@ -1,29 +1,7 @@
-# wolf_sheep_needs.py
-#
-# Needs-based Wolf-Sheep prototype — part of my GSoC 2026 Behavioral Framework work
-#
-# The standard Mesa Wolf-Sheep uses a fixed probability for reproduction
-# (wolf_reproduce = 0.05 etc). That always felt weird to me — a wolf doesn't
-# decide to reproduce based on a dice roll, it does it when it's healthy enough
-# and not starving. So this version replaces those probabilities with explicit
-# needs that build up over time and drive behavior.
-#
-# Still a work in progress. Main thing I'm trying to figure out is how much
-# scaffolding Mesa forces you to write vs what it could provide natively.
-# Notes on that are in BEHAVIORAL_NOTES.md.
-
 from mesa import Agent, Model
 from mesa.time import RandomActivation
 from mesa.space import MultiGrid
 
-
-# --- Needs framework ---------------------------------------------------------
-#
-# Had to write this from scratch. Basically a need has an urgency level
-# that ticks up every step and drops when satisfied. The agent looks at
-# all its needs each step and acts on whichever is most urgent.
-#
-# If Mesa had a NeedsAgent base class built in, I wouldn't need any of this.
 
 class Need:
     def __init__(self, name, initial=0.0, growth=0.05):
@@ -66,7 +44,7 @@ class NeedsAgent(Agent):
             n.tick()
 
 
-# --- Wolf --------------------------------------------------------------------
+# --- Wolf --------
 
 class Wolf(NeedsAgent):
     # Two needs: hunger and reproduction.
@@ -124,7 +102,7 @@ class Wolf(NeedsAgent):
             self.need("reproduction").satisfy(1.0)
 
 
-# --- Sheep -------------------------------------------------------------------
+# --- Sheep -----
 
 class Sheep(NeedsAgent):
     # Two needs: hunger and fear.
@@ -195,7 +173,7 @@ class Sheep(NeedsAgent):
         self.model.grid.move_agent(self, self.random.choice(options))
 
 
-# --- GrassPatch --------------------------------------------------------------
+# --- GrassPatch -----
 
 class GrassPatch(Agent):
     def __init__(self, unique_id, model, grown=True, regrow_after=5):
@@ -212,7 +190,7 @@ class GrassPatch(Agent):
                 self._timer = 0
 
 
-# --- Model -------------------------------------------------------------------
+# --- Model ------
 
 class WolfSheepNeedsModel(Model):
     # Main difference from the standard Mesa Wolf-Sheep:
