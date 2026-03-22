@@ -20,9 +20,7 @@ class Need:
 
 
 class NeedsAgent(Agent):
-    # Base class for agents driven by needs.
-    # Subclasses call add_need() in __init__ and then use most_urgent()
-    # in their step() to decide what to do.
+    
 
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
@@ -47,14 +45,7 @@ class NeedsAgent(Agent):
 # --- Wolf --------
 
 class Wolf(NeedsAgent):
-    # Two needs: hunger and reproduction.
-    # Hunger grows faster so it takes priority most of the time,
-    # but reproduction urgency builds up slowly and eventually
-    # the wolf will look for a chance to breed.
-    #
-    # Mesa issue: to find nearby sheep I have to go through
-    # self.model.grid directly. There's no cleaner way to do
-    # environment perception in Mesa right now.
+   
 
     def __init__(self, unique_id, model, energy=10):
         super().__init__(unique_id, model)
@@ -105,16 +96,7 @@ class Wolf(NeedsAgent):
 # --- Sheep -----
 
 class Sheep(NeedsAgent):
-    # Two needs: hunger and fear.
-    # Fear is interesting — it spikes when wolves are nearby and
-    # drives the sheep to flee before it even thinks about eating.
-    # When no wolves are close, fear decays on its own.
-    #
-    # This produces something that looks like flocking without any
-    # explicit flocking rules, which is kind of cool.
-    #
-    # Mesa issue: scanning for nearby wolves is O(n) via get_neighbors.
-    # A spatial query like "nearest agent of type X" would help a lot here.
+
 
     def __init__(self, unique_id, model, energy=10):
         super().__init__(unique_id, model)
@@ -193,10 +175,7 @@ class GrassPatch(Agent):
 # --- Model ------
 
 class WolfSheepNeedsModel(Model):
-    # Main difference from the standard Mesa Wolf-Sheep:
-    # behavior emerges from competing needs instead of probability parameters.
-    # A wolf doesn't reproduce with p=0.05 — it reproduces when its
-    # reproduction urgency beats its hunger urgency AND it has enough energy.
+
 
     def __init__(self, width=20, height=20, n_wolves=10, n_sheep=50, n_grass=100):
         super().__init__()
